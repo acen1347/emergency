@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FAICC PRO - 消防 AI 指挥决策大屏</title>
+    <!-- 引入专业库 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <!-- 引入 html2canvas 和 jspdf 用于导出 -->
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Noto+Sans+SC:wght@300;400;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        cyber: { bg: '#020617', panel: '#0f172a', border: '#1e293b', blue: '#38bdf8', green: '#10b981', red: '#ef4444', gold: '#f59e0b' }
+                    },
+                    fontFamily: { tech: ['Orbitron', 'sans-serif'], main: ['Noto Sans SC', 'sans-serif'] }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background-color: #020617; color: #f1f5f9; font-family: 'Noto Sans SC', sans-serif; height: 1080px; width: 1920px; overflow: hidden; transform-origin: top left; }
+        .glass { background: rgba(15, 23, 42, 0.8); backdrop-filter: blur(12px); border: 1px solid rgba(56, 189, 248, 0.1); }
+        .chart-container { height: 320px; padding: 24px; }
+        .kpi-card { transition: all 0.3s ease; }
+        .kpi-card:hover { border-color: #38bdf8; box-shadow: 0 0 20px rgba(56, 189, 248, 0.1); }
+        .loading-overlay { position: fixed; inset: 0; background: #020617; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.5s ease; }
+        .dot-pulse { position: relative; width: 10px; height: 10px; border-radius: 5px; background-color: #38bdf8; color: #38bdf8; animation: dotPulse 1.5s infinite linear; }
+        @keyframes dotPulse { 0% { box-shadow: 9999px 0 0 -5px; } 30% { box-shadow: 9999px 0 0 2px; } 60%, 100% { box-shadow: 9999px 0 0 -5px; } }
+        .empty-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; opacity: 0.3; }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 2px; }
+    </style>
+</head>
+<body id="dashboard-body">
+
+    <!-- 加载动画 -->
+    <div id="loader" class="loading-overlay">
+        <div class="dot-pulse mb-8"></div>
+        <p class="font-tech text-cyber-blue tracking-widest animate-pulse">SYSTEM INITIALIZING...</p>
+    </div>
+
+    <!-- 顶部标题栏 -->
+    <header class="h-24 px-12 flex items-center justify-between border-b border-cyber-border glass relative z-10">
+        <div class="flex items-center gap-6">
+            <div class="w-12 h-12 bg-cyber-blue rounded-xl flex items-center justify-center shadow-lg shadow-cyber-blue/20">
+                <i class="fas fa-shield-fire text-2xl text-white"></i>
+            </div>
+            <div>
+                <h1 class="text-3xl font-black font-tech tracking-tighter">FAICC <span class="text-cyber-blue">PRO</span> <span class="text-sm font-normal text-slate-500 ml-4 font-main">消防 AI 智能指挥决策系统 v2.0</span></h1>
+                <p id="current-time" class="text-xs font-tech text-slate-500 mt-1">2026-03-24 00:00:00</p>
+            </div>
+        </div>
+
+        <!-- 筛选器与工具 -->
+        <div class="flex items-center gap-8">
+            <div class="flex items-center gap-4 bg-slate-900/50 p-2 rounded-lg border border-slate-800">
+                <div class="flex flex-col">
+                    <span class="text-[10px] text-slate-500 font-bold uppercase">Time Range</span>
+                    <select id="time-filter" onchange="refreshData()" class="bg-transparent text-sm text-slate-300 outline-none">
+                        <option value="1h">近 1 小时</option>
+                        <option value="6h">近 6 小时</option>
+                        <option value="24h" selected>近 24 小时</option>
+                        <option value="all">历史全量</option>
+                    </select>
+                </div>
+                <div class="w-px h-8 bg-slate-800"></div>
+                <div class="flex flex-col">
+                    <span class="text-[10px] text-slate-500 font-bold uppercase">Region</span>
+                    <select id="region-filter" onchange="refreshData()" class="bg-transparent text-sm text-slate-300 outline-none">
+                        <option value="all">全部区域</option>
+                        <option value="朝阳">朝阳区</option>
+                        <option value="海淀">海淀区</option>
+                        <option value="丰台">丰台区</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="flex gap-3">
+                <button onclick="exportPNG()" class="px-6 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-bold transition-all flex items-center gap-2">
+                    <i class="fas fa-file-image"></i> PNG
+                </button>
+                <button onclick="exportPDF()" class="px-6 py-2 bg-cyber-blue text-black hover:brightness-110 rounded-lg text-xs font-bold transition-all flex items-center gap-2 shadow-lg shadow-cyber-blue/20">
+                    <i class="fas fa-file-pdf"></i> 导出报告
+                </button>
+            </div>
+            
+            <div id="refresh-status" class="flex items-center gap-2 text-cyber-green text-[10px] font-bold">
+                <span class="w-1.5 h-1.5 rounded-full bg-cyber-green shadow-glow"></span>
+                LIVE UPDATING
+            </div>
+        </div>
+    </header>
+
+    <!-- 主体内容 -->
+    <main class="p-8 grid grid-cols-12 grid-rows-6 gap-6 h-[984px]">
+        
+        <!-- 左侧：KPI 与 等级分布 -->
+        <div class="col-span-3 row-span-6 flex flex-col gap-6">
+            <!-- KPI 1 -->
+            <div class="grid grid-cols-2 gap-4">
+                <div class="glass p-6 rounded-2xl kpi-card border-l-4 border-cyber-blue">
+                    <p class="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-2">当日累计警情</p>
+                    <div class="flex items-baseline gap-2">
+                        <span id="kpi-total" class="text-4xl font-tech font-bold text-white">0</span>
+                        <span class="text-xs text-slate-600">起</span>
+                    </div>
+                </div>
+                <div class="glass p-6 rounded-2xl kpi-card border-l-4 border-cyber-gold">
+                    <p class="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-2">当前处置中</p>
+                    <div class="flex items-baseline gap-2">
+                        <span id="kpi-active" class="text-4xl font-tech font-bold text-cyber-gold">0</span>
+                        <span class="text-xs text-slate-600">起</span>
+                    </div>
+                </div>
+                <div class="glass p-6 rounded-2xl kpi-card border-l-4 border-cyber-green">
+                    <p class="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-2">在岗消防员</p>
+                    <div class="flex items-baseline gap-2">
+                        <span id="kpi-staff" class="text-4xl font-tech font-bold text-white">0</span>
+                        <span class="text-xs text-slate-600">人</span>
+                    </div>
+                </div>
+                <div class="glass p-6 rounded-2xl kpi-card border-l-4 border-cyber-blue">
+                    <p class="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-2">出动车辆</p>
+                    <div class="flex items-baseline gap-2">
+                        <span id="kpi-engines" class="text-4xl font-tech font-bold text-white">0</span>
+                        <span class="text-xs text-slate-600">辆</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 等级分布 (柱状图) -->
+            <div class="glass rounded-2xl flex-grow overflow-hidden flex flex-col">
+                <div class="px-6 py-4 border-b border-white/5 flex items-center justify-between">
+                    <h2 class="text-sm font-bold flex items-center gap-2">
+                        <i class="fas fa-layer-group text-cyber-blue"></i> 警情等级分布统计
+                    </h2>
+                    <span class="text-[9px] text-slate-500 font-tech">SEVERITY_LEVEL_STATS</span>
+                </div>
+                <div id="chart-severity" class="chart-container flex-grow"></div>
+            </div>
+
+            <!-- 场景识别分布 (饼图) -->
+            <div class="glass rounded-2xl flex-grow overflow-hidden flex flex-col">
+                <div class="px-6 py-4 border-b border-white/5 flex items-center justify-between">
+                    <h2 class="text-sm font-bold flex items-center gap-2">
+                        <i class="fas fa-chart-pie text-cyber-gold"></i> 核心场景风险分布
+                    </h2>
+                    <span class="text-[9px] text-slate-500 font-tech">SCENE_ANALYSIS</span>
+                </div>
+                <div id="chart-scene" class="chart-container flex-grow"></div>
+            </div>
+        </div>
+
+        <!-- 中间：核心地图热力图 -->
+        <div class="col-span-6 row-span-4 glass rounded-3xl relative overflow-hidden group">
+            <!-- 地图装饰 -->
+            <div class="absolute inset-0 bg-[radial-gradient(circle_at_center,#1e293b_0%,#020617_100%)] opacity-50"></div>
+            <div class="absolute inset-0 pointer-events-none" style="background-image: linear-gradient(rgba(56, 189, 248, 0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(56, 189, 248, 0.05) 1px, transparent 1px); background-size: 50px 50px;"></div>
+            
+            <div class="absolute top-8 left-10 z-20">
+                <div class="px-3 py-1 bg-cyber-blue/10 border border-cyber-blue/30 rounded text-[10px] font-black text-cyber-blue uppercase tracking-widest animate-pulse">Tactical Heatmap</div>
+                <h3 class="text-2xl font-bold mt-2">区域火险热力态势感官</h3>
+            </div>
+
+            <div id="chart-map" class="w-full h-full z-10"></div>
+            
+            <!-- 热力图例 -->
+            <div class="absolute bottom-8 right-10 z-20 glass p-4 rounded-xl border border-white/5 text-[10px] space-y-2">
+                <p class="text-slate-500 font-bold uppercase mb-2">Intensity Scale</p>
+                <div class="flex items-center gap-3">
+                    <div class="w-20 h-2 bg-gradient-to-r from-blue-500 via-yellow-500 to-red-500 rounded-full"></div>
+                    <span class="text-slate-300">LOW → HIGH</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 中间底部：警情趋势分析 -->
+        <div class="col-span-6 row-span-2 glass rounded-2xl flex flex-col overflow-hidden">
+            <div class="px-6 py-4 border-b border-white/5 flex items-center justify-between">
+                <h2 class="text-sm font-bold flex items-center gap-2">
+                    <i class="fas fa-chart-line text-cyber-green"></i> 近 8 小时警情变化趋势
+                </h2>
+                <span class="text-[9px] text-slate-500 font-tech">TIME_SERIES_TREND</span>
+            </div>
+            <div id="chart-trend" class="chart-container flex-grow"></div>
+        </div>
+
+        <!-- 右侧：决策指标与实时列表 -->
+        <div class="col-span-3 row-span-6 flex flex-col gap-6">
+            <!-- 快速报警终端 -->
+            <div class="glass rounded-2xl p-6 border-t-4 border-cyber-blue">
+                <div class="flex items-center gap-3 mb-4">
+                    <i class="fas fa-paper-plane text-cyber-blue"></i>
+                    <h2 class="text-sm font-bold uppercase tracking-widest">战术指令终端</h2>
+                </div>
+                <div class="space-y-4">
+                    <div class="space-y-1">
+                        <label class="text-[10px] text-slate-500 font-bold">目标地点 (LOCATION)</label>
+                        <input id="input-loc" type="text" placeholder="输入或点击地图取点..." class="w-full bg-slate-900/50 border border-slate-800 rounded-lg p-2 text-xs outline-none focus:border-cyber-blue transition-all">
+                    </div>
+                    <div class="flex gap-2">
+                        <div class="flex-grow space-y-1">
+                            <label class="text-[10px] text-slate-500 font-bold">等级 (LVL)</label>
+                            <select id="input-lvl" class="w-full bg-slate-900/50 border border-slate-800 rounded-lg p-2 text-xs outline-none">
+                                <option value="1">L1 - 常规</option>
+                                <option value="2">L2 - 注意</option>
+                                <option value="3" selected>L3 - 严重</option>
+                                <option value="4">L4 - 紧急</option>
+                                <option value="5">L5 - 极端</option>
+                            </select>
+                        </div>
+                        <button onclick="dispatchFire()" class="self-end px-4 py-2 bg-cyber-blue text-black font-black text-[10px] rounded-lg hover:brightness-110 active:scale-95 transition-all shadow-lg shadow-cyber-blue/20">
+                            EXECUTE
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 仪表盘指标 -->
+            <div class="glass rounded-2xl p-6 flex flex-col gap-6 flex-grow">
+                <div class="flex items-center gap-3 mb-2">
+                    <i class="fas fa-gauge-high text-cyber-blue"></i>
+                    <h2 class="text-sm font-bold">智能体协同效能指标</h2>
+                </div>
+                <div class="grid grid-cols-1 gap-6">
+                    <div id="gauge-precision" class="h-40"></div>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="text-center">
+                        <p class="text-[10px] text-slate-500 font-bold uppercase mb-1">平均响应耗时</p>
+                        <p id="metric-time" class="text-xl font-tech font-bold text-cyber-green">0.0</p>
+                        <p class="text-[9px] text-slate-700">MINUTES</p>
+                    </div>
+                    <div class="text-center">
+                        <p class="text-[10px] text-slate-500 font-bold uppercase mb-1">资源负荷率</p>
+                        <p id="metric-load" class="text-xl font-tech font-bold text-cyber-gold">0.0%</p>
+                        <p class="text-[9px] text-slate-700">UTILIZATION</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 实时警情动态 (列表) -->
+            <div class="glass rounded-2xl flex-grow overflow-hidden flex flex-col">
+                <div class="px-6 py-4 border-b border-white/5 bg-white/5 flex justify-between items-center">
+                    <h2 class="text-xs font-bold uppercase tracking-widest">实时警情流播</h2>
+                    <span class="text-[9px] font-tech text-cyber-blue">LIVE_FEED</span>
+                </div>
+                <div class="flex-grow overflow-y-auto">
+                    <div id="incident-feed" class="p-4 space-y-4">
+                        <!-- 动态列表项 -->
+                        <div class="empty-placeholder">
+                            <i class="fas fa-inbox text-3xl mb-2"></i>
+                            <p class="text-[10px]">NO_ACTIVE_INCIDENTS</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 底部页脚 -->
+    <footer class="h-12 px-12 flex items-center justify-between glass border-t border-cyber-border text-[10px] font-bold text-slate-500 uppercase tracking-widest relative z-10">
+        <div class="flex items-center gap-8">
+            <div class="flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full bg-cyber-green animate-pulse"></span>
+                DB_CONNECTION: SECURE
+            </div>
+            <div class="flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full bg-cyber-green animate-pulse"></span>
+                AGENT_COORDINATION: ACTIVE
+            </div>
+        </div>
+        <div>© 2026 FAICC EMERGENCY OPERATIONS CENTER. ALL SYSTEMS OPERATIONAL.</div>
+    </footer>
+
+    <script>
+        const API_BASE = "http://127.0.0.1:8000/api";
+        let charts = {};
+        let refreshTimer = null;
+
+        // 初始化
+        window.onload = async () => {
+            // 设置缩放以适应屏幕 (1920x1080 比例)
+            function handleResize() {
+                const designWidth = 1920;
+                const designHeight = 1080;
+                const clientWidth = window.innerWidth;
+                const clientHeight = window.innerHeight;
+                
+                const scaleX = clientWidth / designWidth;
+                const scaleY = clientHeight / designHeight;
+                const scale = Math.min(scaleX, scaleY);
+                
+                const body = document.getElementById('dashboard-body');
+                body.style.transform = `scale(${scale})`;
+                // 居中显示
+                body.style.left = `${(clientWidth - designWidth * scale) / 2}px`;
+                body.style.top = `${(clientHeight - designHeight * scale) / 2}px`;
+                body.style.position = 'absolute';
+            }
+            
+            window.addEventListener('resize', handleResize);
+            handleResize();
+            
+            initCharts();
+            updateClock();
+            setInterval(updateClock, 1000);
+            
+            await refreshData();
+            
+            // 隐藏加载动画
+            setTimeout(() => {
+                const loader = document.getElementById('loader');
+                loader.style.opacity = '0';
+                setTimeout(() => loader.style.display = 'none', 500);
+            }, 800);
+
+            // 定时刷新 (30s)
+            refreshTimer = setInterval(refreshData, 30000);
+        };
+
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('current-time').textContent = now.toLocaleString('zh-CN', { 
+                year: 'numeric', month: '2-digit', day: '2-digit', 
+                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false 
+            }).replace(/\//g, '-');
+        }
+
+        function initCharts() {
+            // 1. 等级分布 - 柱状图
+            charts.severity = echarts.init(document.getElementById('chart-severity'), 'dark');
+            charts.severity.setOption({
+                backgroundColor: 'transparent',
+                animationDuration: 2000,
+                grid: { top: 20, left: 40, right: 20, bottom: 40 },
+                xAxis: { type: 'category', data: [], axisLine: { lineStyle: { color: '#334155' } } },
+                yAxis: { type: 'value', splitLine: { lineStyle: { color: '#1e293b' } } },
+                series: [{ 
+                    type: 'bar', data: [], 
+                    showBackground: true, backgroundStyle: { color: 'rgba(255, 255, 255, 0.02)' },
+                    itemStyle: { 
+                        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                            { offset: 0, color: '#38bdf8' }, { offset: 1, color: '#0ea5e9' }
+                        ]),
+                        borderRadius: [4, 4, 0, 0]
+                    } 
+                }]
+            });
+
+            // 2. 场景分布 - 饼图
+            charts.scene = echarts.init(document.getElementById('chart-scene'), 'dark');
+            charts.scene.setOption({
+                backgroundColor: 'transparent',
+                tooltip: { trigger: 'item' },
+                series: [{
+                    type: 'pie', radius: ['40%', '70%'],
+                    itemStyle: { borderRadius: 8, borderColor: '#0f172a', borderWidth: 2 },
+                    label: { show: true, fontSize: 10, formatter: '{b}\n{d}%' },
+                    data: []
+                }]
+            });
+
+            // 3. 趋势分析 - 折线图
+            charts.trend = echarts.init(document.getElementById('chart-trend'), 'dark');
+            charts.trend.setOption({
+                backgroundColor: 'transparent',
+                tooltip: { trigger: 'axis' },
+                grid: { top: 30, left: 40, right: 40, bottom: 40 },
+                xAxis: { type: 'category', data: [], boundaryGap: false },
+                yAxis: { type: 'value' },
+                series: [{
+                    type: 'line', smooth: true, data: [],
+                    lineStyle: { width: 4, color: '#10b981' },
+                    areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                        { offset: 0, color: 'rgba(16,185,129,0.3)' }, { offset: 1, color: 'transparent' }
+                    ])},
+                    symbol: 'circle', symbolSize: 8
+                }]
+            });
+            
+            // 4. 地图点位/热力 (增加点击取点)
+            charts.map = echarts.init(document.getElementById('chart-map'), 'dark');
+            charts.map.on('click', function(params) {
+                if(params.componentType === 'series') {
+                    document.getElementById('input-loc').value = params.data.name || params.name;
+                } else {
+                    // 点击空白处模拟取点
+                    const point = charts.map.convertFromPixel('grid', [params.event.offsetX, params.event.offsetY]);
+                    if(point) {
+                        document.getElementById('input-loc').value = `坐标 [${point[0].toFixed(3)}, ${point[1].toFixed(3)}]`;
+                    }
+                }
+            });
+
+            charts.map.setOption({
+                backgroundColor: 'transparent',
+                tooltip: { show: true, backgroundColor: '#0f172a', borderColor: '#38bdf8', textStyle: { color: '#fff' } },
+                xAxis: { show: false, min: 116.35, max: 116.55 },
+                yAxis: { show: false, min: 39.85, max: 40.05 },
+                series: [
+                    {
+                        name: '火险热力',
+                        type: 'heatmap',
+                        coordinateSystem: 'cartesian2d',
+                        data: [],
+                        pointSize: 15,
+                        blurSize: 25
+                    },
+                    {
+                        name: '实时警情点',
+                        type: 'scatter',
+                        coordinateSystem: 'cartesian2d',
+                        data: [],
+                        symbolSize: val => Math.sqrt(val[2]) * 3,
+                        label: { show: false, position: 'right', formatter: '{b}', color: '#fff' },
+                        emphasis: { label: { show: true } },
+                        itemStyle: { 
+                            color: '#ef4444', 
+                            shadowBlur: 20, 
+                            shadowColor: '#ef4444' 
+                        }
+                    }
+                ]
+            });
+
+            // 5. 协同效能 - 仪表盘
+            charts.precision = echarts.init(document.getElementById('gauge-precision'), 'dark');
+            charts.precision.setOption({
+                backgroundColor: 'transparent',
+                series: [{
+                    type: 'gauge',
+                    startAngle: 180, endAngle: 0,
+                    min: 0, max: 100,
+                    progress: { show: true, width: 12, itemStyle: { color: '#38bdf8' } },
+                    axisLine: { lineStyle: { width: 12, color: [[1, '#1e293b']] } },
+                    axisTick: { show: false }, splitLine: { show: false },
+                    axisLabel: { show: false },
+                    pointer: { show: false },
+                    title: { offsetCenter: [0, '20%'], fontSize: 10, color: '#64748b' },
+                    detail: { offsetCenter: [0, '-10%'], fontSize: 24, fontWeight: 'bold', color: '#fff', formatter: '{value}%' },
+                    data: [{ value: 0, name: 'AI 决策准确率' }]
+                }]
+            });
+
+            window.addEventListener('resize', () => Object.values(charts).forEach(c => c.resize()));
+        }
+
+        async function refreshData() {
+            const timeRange = document.getElementById('time-filter').value;
+            const region = document.getElementById('region-filter').value;
+            
+            try {
+                const res = await fetch(`${API_BASE}/dashboard/pro_data?time_range=${timeRange}&region=${region}`);
+                const json = await res.json();
+                if (json.code === 200) {
+                    const d = json.data;
+                    
+                    // KPI
+                    animateNumber('kpi-total', d.kpi.total);
+                    animateNumber('kpi-active', d.kpi.active);
+                    animateNumber('kpi-staff', d.kpi.staff);
+                    animateNumber('kpi-engines', d.kpi.engines);
+                    
+                    // Charts
+                    charts.severity.setOption({
+                        xAxis: { data: d.severity.map(i => i.level) },
+                        series: [{ data: d.severity.map(i => i.count) }]
+                    });
+                    
+                    charts.scene.setOption({
+                        series: [{ data: d.scene }]
+                    });
+                    
+                    charts.trend.setOption({
+                        xAxis: { data: d.trend.labels },
+                        series: [{ data: d.trend.values }]
+                    });
+                    
+                    charts.map.setOption({
+                        series: [
+                            { data: d.map.map(p => p.value) },
+                            { data: d.map.map(p => ({ name: p.name, value: p.value })) }
+                        ]
+                    });
+                    
+                    charts.precision.setOption({
+                        series: [{ data: [{ value: d.metrics.ai_precision, name: 'AI 决策准确率' }] }]
+                    });
+                    
+                    document.getElementById('metric-time').textContent = d.metrics.avg_response_time.toFixed(1);
+                    document.getElementById('metric-load').textContent = d.metrics.resource_utilization.toFixed(1) + '%';
+                    
+                    // Incident Feed
+                    renderFeed(d.map.slice(0, 10));
+                }
+            } catch (e) {
+                console.error("Data fetch error", e);
+            }
+        }
+
+        // 新增：派遣指令执行
+        async function dispatchFire() {
+            const loc = document.getElementById('input-loc').value;
+            const lvl = document.getElementById('input-lvl').value;
+            if(!loc) return alert("请先在地图上取点或输入地点");
+
+            try {
+                const res = await fetch(`${API_BASE}/process_fire_event?location=${encodeURIComponent(loc)}&severity=${lvl}`);
+                const json = await res.json();
+                if(json.code === 200) {
+                    // 成功后立即刷新数据
+                    await refreshData();
+                    // 清空输入
+                    document.getElementById('input-loc').value = "";
+                    // 弹出成功提示 (可选，大屏通常直接显示变化)
+                } else {
+                    alert("执行失败: " + json.msg);
+                }
+            } catch (e) {
+                console.error("Dispatch error", e);
+            }
+        }
+
+        function renderFeed(items) {
+            const container = document.getElementById('incident-feed');
+            if (items.length === 0) {
+                container.innerHTML = `<div class="empty-placeholder"><i class="fas fa-inbox text-3xl mb-2"></i><p class="text-[10px]">NO_ACTIVE_INCIDENTS</p></div>`;
+                return;
+            }
+            container.innerHTML = items.map(item => `
+                <div class="p-4 rounded-xl bg-slate-900/50 border border-slate-800 flex flex-col gap-2 hover:border-cyber-blue/30 transition-all cursor-pointer">
+                    <div class="flex justify-between items-start">
+                        <span class="text-xs font-bold text-slate-200 truncate w-32">${item.name}</span>
+                        <span class="px-2 py-0.5 rounded bg-cyber-red/10 text-cyber-red text-[8px] font-black uppercase">Level ${item.severity}</span>
+                    </div>
+                    <div class="flex justify-between items-center text-[10px] text-slate-500 font-tech">
+                        <span>${item.time.split(' ')[1]}</span>
+                        <span class="${item.status === 'processing' ? 'text-cyber-gold' : 'text-cyber-green'}">${item.status.toUpperCase()}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function animateNumber(id, end) {
+            const el = document.getElementById(id);
+            const start = parseInt(el.textContent) || 0;
+            const duration = 1000;
+            let startTime = null;
+            function step(timestamp) {
+                if (!startTime) startTime = timestamp;
+                const progress = Math.min((timestamp - startTime) / duration, 1);
+                el.textContent = Math.floor(progress * (end - start) + start);
+                if (progress < 1) window.requestAnimationFrame(step);
+            }
+            window.requestAnimationFrame(step);
+        }
+
+        async function exportPNG() {
+            const body = document.getElementById('dashboard-body');
+            const canvas = await html2canvas(body, { scale: 1 });
+            const link = document.createElement('a');
+            link.download = `FAICC_PRO_REPORT_${new Date().getTime()}.png`;
+            link.href = canvas.toDataURL();
+            link.click();
+        }
+
+        async function exportPDF() {
+            const { jsPDF } = window.jspdf;
+            const body = document.getElementById('dashboard-body');
+            const canvas = await html2canvas(body, { scale: 1 });
+            const imgData = canvas.toDataURL('image/png');
+            const pdf = new jsPDF('l', 'px', [1920, 1080]);
+            pdf.addImage(imgData, 'PNG', 0, 0, 1920, 1080);
+            pdf.save(`FAICC_DECISION_REPORT_${new Date().getTime()}.pdf`);
+        }
+    </script>
+</body>
+</html>
